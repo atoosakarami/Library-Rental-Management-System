@@ -5,137 +5,163 @@
 # -- Kivy: pip3 install kivy
 
 from tkinter import *
-
 import sqlite3
 
-#create tkinter window
-
 root = Tk()
+root.title('Library Management System')
+root.geometry("400x400")
+root.config(bg="#d5faa7")
 
-root.title('Address Book')
+db = sqlite3.connect('LMS.db')
+cursor = db.cursor()
 
-root.geometry("400x400") #x-axis y-axis place
+# ── Hidden input widgets ──────────────────────────────────────────
 
+# Add Borrower fields
+f_name_label = Label(root, text='First Name: ', bg="#d5faa7")
+f_name = Entry(root, width=30)
+l_name_label = Label(root, text='Last Name: ', bg="#d5faa7")
+l_name = Entry(root, width=30)
 
+# Check Out Book fields
+book_id_label = Label(root, text='Book ID: ', bg="#d5faa7")
+book_id = Entry(root, width=30)
+borrower_id_label = Label(root, text='Borrower ID: ', bg="#d5faa7")
+borrower_id = Entry(root, width=30)
 
-#connect to the DB
+# Add New Book fields
+book_title_label = Label(root, text='Book Title: ', bg="#d5faa7")
+book_title = Entry(root, width=30)
+book_author_label = Label(root, text='Author: ', bg="#d5faa7")
+book_author = Entry(root, width=30)
 
-conn = sqlite3.connect('address_book.db')
-print("Connected to DB Succesfully")
+# List Copies fields
+copies_book_id_label = Label(root, text='Book ID: ', bg="#d5faa7")
+copies_book_id = Entry(root, width=30)
 
-#create DB cursor 
-add_addressTable_c = conn.cursor()
+# List Borrower fields
+list_borrower_id_label = Label(root, text='Borrower ID: ', bg="#d5faa7")
+list_borrower_id = Entry(root, width=30)
 
-# add_addressTable_c.execute('''CREATE TABLE ADDRESSES(FIRST_NAME TEXT,
-# 					LAST_NAME TEXT,
-# 					ADDRESS TEXT,
-# 					CITY TEXT,
-# 					STATE TEXT,
-# 					ZIPCODE INT)''')
+# Shared confirm/cancel buttons (hidden at start)
+confirm_btn = Button(root, text="Submit")
+cancel_btn = Button(root, text="Cancel", command=lambda: hide_all())
 
+# ── All main buttons ──────────────────────────────────────────────
 
-#define the submit function
+main_buttons_config = [
+    ("Add Borrower",   lambda: show_form("add_borrower")),
+    ("Check Out Book", lambda: show_form("checkout")),
+    ("Add New Book",   lambda: show_form("add_book")),
+    ("List Copies",    lambda: show_form("list_copies")),
+    ("List Borrower",  lambda: show_form("list_borrower")),
+]
 
-def submit():
-	submit_conn = sqlite3.connect('address_book.db')
-	submit_cur = submit_conn.cursor()
+main_buttons = []
+for i, (label, cmd) in enumerate(main_buttons_config):
+    btn = Button(root, text=label, command=cmd, width=30)
+    btn.grid(row=i, column=0, columnspan=2, pady=5, padx=10)
+    main_buttons.append(btn)
 
+# ── Helper functions ──────────────────────────────────────────────
 
-	submit_cur.execute("INSERT INTO ADDRESSES VALUES(:f_name, :l_name, :street, :city, :state, :zcode)",
-		{
-			'f_name': f_name.get(),
-			'l_name': l_name.get(),
-			'street': street.get(),
-			'city': city.get(),
-			'state': state.get(),
-			'zcode': zcode.get()
-		})
-	submit_conn.commit()
-	submit_conn.close()
+def hide_main_buttons():
+    for btn in main_buttons:
+        btn.grid_forget()
 
+def show_main_buttons():
+    for i, btn in enumerate(main_buttons):
+        btn.grid(row=i, column=0, columnspan=2, pady=5, padx=10)
 
-#based on a city and state list names 
+def hide_all_inputs():
+    """Hide every input widget."""
+    all_inputs = [
+        f_name_label, f_name, l_name_label, l_name,
+        book_id_label, book_id, borrower_id_label, borrower_id,
+        book_title_label, book_title, book_author_label, book_author,
+        copies_book_id_label, copies_book_id,
+        list_borrower_id_label, list_borrower_id,
+        confirm_btn, cancel_btn,
+    ]
+    for w in all_inputs:
+        w.grid_forget()
 
-def input_query():
+def clear_all_entries():
+    for entry in [f_name, l_name, book_id, borrower_id,
+                  book_title, book_author, copies_book_id, list_borrower_id]:
+        entry.delete(0, END)
 
-	iq_conn = sqlite3.connect('address_book.db')
-	iq_cur = iq_conn.cursor()
+def hide_all():
+    """Cancel — go back to main menu."""
+    hide_all_inputs()
+    clear_all_entries()
+    show_main_buttons()
 
-	iq_cur.execute("SELECT FIRST_NAME, LAST_NAME FROM ADDRESSES WHERE CITY = ? AND STATE = ?",
-		(city.get(), state.get(),))
+# ── Show form based on which button was clicked ───────────────────
 
-	records = iq_cur.fetchall()
+def show_form(form_name):
+    hide_main_buttons()
+    hide_all_inputs()
 
-	print(records)
+    forms = {
+        "add_borrower": [
+            (f_name_label, 0, 0), (f_name, 0, 1),
+            (l_name_label, 1, 0), (l_name, 1, 1),
+        ],
+        "checkout": [
+            (book_id_label, 0, 0),     (book_id, 0, 1),
+            (borrower_id_label, 1, 0), (borrower_id, 1, 1),
+        ],
+        "add_book": [
+            (book_title_label, 0, 0),  (book_title, 0, 1),
+            (book_author_label, 1, 0), (book_author, 1, 1),
+        ],
+        "list_copies": [
+            (copies_book_id_label, 0, 0), (copies_book_id, 0, 1),
+        ],
+        "list_borrower": [
+            (list_borrower_id_label, 0, 0), (list_borrower_id, 0, 1),
+        ],
+    }
 
-	print_records = ''
+    # Grid the correct input widgets
+    for widget, row, col in forms[form_name]:
+        widget.grid(row=row, column=col, padx=10, pady=5)
 
-	for record in records:
-		print_records += str(record[0] + " " + record[1] + "\n")
+    # Map form to its submit function
+    submit_commands = {
+        "add_borrower":  submit_borrower,
+        "checkout":      submit_checkout,
+        "add_book":      submit_book,
+        "list_copies":   submit_list_copies,
+        "list_borrower": submit_list_borrower,
+    }
 
-	iq_label = Label(root, text = print_records)
-	iq_label.grid(row = 9, column = 0, columnspan = 2)
+    next_row = len(forms[form_name]) // 2  # one row per label+entry pair
+    confirm_btn.config(command=submit_commands[form_name])
+    confirm_btn.grid(row=next_row, column=0, pady=10, padx=10, ipadx=60)
+    cancel_btn.grid(row=next_row, column=1, pady=10, padx=10, ipadx=60)
 
-	iq_conn.commit()
-	iq_conn.close()
+# ── Submit functions ──────────────────────────────────────────────
 
+def submit_borrower():
+    print(f"Adding borrower: {f_name.get()} {l_name.get()}")
+    hide_all()
 
+def submit_checkout():
+    print(f"Checking out book ID {book_id.get()} to borrower {borrower_id.get()}")
+    hide_all()
 
-#define all the GUI components on the tkinter root window
-# place your wdgets: place / grid / pack
+def submit_book():
+    print(f"Adding book: {book_title.get()} by {book_author.get()}")
+    hide_all()
 
+def submit_list_copies():
+    print(f"Listing copies for book ID: {copies_book_id.get()}")
+    hide_all()
 
-#defne all textboxes
-f_name = Entry(root, width = 30)
-f_name.grid(row = 0, column = 1, padx = 20)
-
-l_name = Entry(root, width = 30)
-l_name.grid(row = 1, column = 1)
-
-street = Entry(root, width = 30)
-street.grid(row = 2, column = 1)
-
-city = Entry(root, width = 30)
-city.grid(row = 3, column = 1)
-
-state = Entry(root, width = 30)
-state.grid(row = 4, column = 1)
-
-zcode = Entry(root, width = 30)
-zcode.grid(row = 5, column = 1)
-
-
-
-#define all labels
-f_name_label = Label(root, text ='First Name: ')
-f_name_label.grid(row = 0, column = 0)
-
-l_name_label = Label(root, text ='Last Name: ')
-l_name_label.grid(row = 1, column = 0)
-
-st_label = Label(root, text ='Street: ')
-st_label.grid(row = 2, column = 0)
-
-city_label = Label(root, text ='City: ')
-city_label.grid(row = 3, column = 0)
-
-state_label = Label(root, text ='State: ')
-state_label.grid(row = 4, column = 0, sticky = "w")
-
-zcode_label = Label(root, text ='Zipcode: ')
-zcode_label.grid(row = 5, column = 0)
-
-#submit button -- adds a new record to the address table
-
-submit_btn = Button(root, text = "Add Address", command = submit)
-submit_btn.grid(row = 6, column = 0, columnspan = 2, pady = 10, padx = 10, ipadx = 100)
-
-input_query_btn = Button(root, text= "Show Records", command = input_query)
-input_query_btn.grid(row = 7, column = 0, columnspan = 2, pady = 10, padx = 10, ipadx = 100)
-
-
-
-
-
+def submit_list_borrower():
+    print(f"Listing borrower ID: {list_borrower_id.get()}")
+    hide_all()
 
 root.mainloop()
