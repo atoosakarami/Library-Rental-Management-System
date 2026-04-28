@@ -235,6 +235,11 @@ def hide_all():
     clear_all_entries()
     show_main_buttons()
 
+def display_results(rows):
+    result_box.delete("1.0", END)
+
+    for row in rows:
+        result_box.insert(END, str(row) + "\n")
 
 # -- Form routing ---------------------------------------------------------------
 
@@ -263,6 +268,10 @@ def show_form(form_name):
         'list_borrower': [
             (list_borrower_id_label, 0, 0), (list_borrower_id, 0, 1),
         ],
+        "late_returns": [
+            (due_start_label, 0, 0), (due_start, 0, 1),
+            (due_end_label, 1, 0), (due_end, 1, 1),
+        ],
     }
 
     for widget, row, col in forms[form_name]:
@@ -274,13 +283,13 @@ def show_form(form_name):
         'add_book': submit_book,
         'list_copies': submit_list_copies,
         'list_borrower': submit_list_borrower,
+        "late_returns": submit_late_returns,
     }
 
     next_row = len(forms[form_name]) // 2
     confirm_btn.config(command=submit_commands[form_name])
     confirm_btn.grid(row=next_row, column=0, pady=10, padx=10, ipadx=60)
     cancel_btn.grid(row=next_row, column=1, pady=10, padx=10, ipadx=60)
-
 
 # -- Submit handlers ------------------------------------------------------------
 
