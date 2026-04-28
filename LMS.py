@@ -169,6 +169,7 @@ main_buttons_config = [
      ('Add New Book', lambda: show_form('add_book')),
      ('List Copies', lambda: show_form('list_copies')),
      ('List Borrower', lambda: show_form('list_borrower')),
+     ("Late Returns by Due Date", lambda: show_form("late_returns")),
  ]
 main_buttons = []
  for i, (label, cmd) in enumerate(main_buttons_config):
@@ -190,7 +191,9 @@ def hide_all_inputs():
          book_author_label, book_author,
          copies_book_id_label, copies_book_id,
          list_borrower_id_label, list_borrower_id,
-         confirm_btn, cancel_btn,
+         confirm_btn, cancel_btn, purpose_label,
+        due_start_label, due_start,
+        due_end_label, due_end
      ]
      for widget in all_inputs:
          widget.grid_forget()
@@ -231,6 +234,10 @@ def show_form(form_name):
          'list_borrower': [
              (list_borrower_id_label, 0, 0), (list_borrower_id, 0, 1),
          ],
+         "late_returns": [
+            (due_start_label, 0, 0), (due_start, 0, 1),
+            (due_end_label, 1, 0), (due_end, 1, 1),
+         ],
      }
     for widget, row, col in forms[form_name]:
          widget.grid(row=row, column=col, padx=10, pady=5)
@@ -240,6 +247,7 @@ def show_form(form_name):
          'add_book': submit_book,
          'list_copies': submit_list_copies,
          'list_borrower': submit_list_borrower,
+         "late_returns": submit_late_returns,
      }
     next_row = len(forms[form_name]) // 2
      confirm_btn.config(command=submit_commands[form_name])
@@ -376,4 +384,58 @@ def submit_list_borrower():
     except sqlite3.Error as e:
          print(f'Database error: {e}')
     hide_all()
+def submit_late_returns():
+    try:
+        cursor.execute("""
+                    SELECT 
+                BL.Book_Id,
+                B.Title,
+                BL.Branch_Id,
+                BL.Card_No,
+                BO.Name AS Borrower_Name,
+                BL.Date_Out,
+                BL.Due_Date,
+                BL.Returned_date,
+                CAST(julianday(BL.Returned_date) - julianday(BL.Due_Date) AS INT) AS Days_Late
+            FROM BOOK_LOANS BL
+            JOIN BOOK B ON BL.Book_Id = B.Book_Id
+            JOIN BORROWER BO ON BL.Card_No = BO.Card_No
+            WHERE BL.Due_Date BETWEEN ? AND ?
+              AND date(BL.Returned_date) IS NOT NULL
+              AND date(BL.Returned_date) > date(BL.Due_Date)
+        """, (due_start.get(), due_end.get()))
+
+        rows = cursor.fetchall()
+
+        result_box.delete("1.0", END)
+        result_box.insert(
+            END,
+            "Shows book loans returned after the due date within the selected due date range.\n\n"
+        )
+
+        if len(rows) == 0:
+            result_box.insert(END, "No late returns found for this due date range.\n")
+        else:
+            for row in rows:
+                result_box.insert(
+                    END,
+                    f"Book ID: {row[0]}\n"
+                    f"Title: {row[1]}\n"
+                    f"Branch ID: {row[2]}\n"
+                    f"Borrower ID: {row[3]}\n"
+                    f"Borrower Name: {row[4]}\n"
+                    f"Date Out: {row[5]}\n"
+                    f"Due Date: {row[6]}\n"
+                    f"Returned Date: {row[7]}\n"
+                    f"Days Late: {row[8]}\n"
+                    f"----------------------\n"
+                )
+
+    except sqlite3.Error as e:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Error: " + str(e))
+     
+result_box = Text(root, height=10, width=45)
+result_box.grid(row=10, column=0, columnspan=2)
+
 root.mainloop()
