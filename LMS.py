@@ -129,11 +129,13 @@ def ensure_five_branches():
  address = Entry(root, width=30)
  phone_label = Label(root, text='Phone: ', bg='#d5faa7')
  phone = Entry(root, width=30)
+
 # Check Out Book fields
  book_id_label = Label(root, text='Book ID: ', bg='#d5faa7')
  book_id = Entry(root, width=30)
  borrower_id_label = Label(root, text='Borrower ID: ', bg='#d5faa7')
  borrower_id = Entry(root, width=30)
+
 # Add New Book fields
  book_title_label = Label(root, text='Book Title: ', bg='#d5faa7')
  book_title = Entry(root, width=30)
@@ -141,12 +143,22 @@ def ensure_five_branches():
  book_publisher = Entry(root, width=30)
  book_author_label = Label(root, text='Author: ', bg='#d5faa7')
  book_author = Entry(root, width=30)
+
 # List Copies fields
  copies_book_id_label = Label(root, text='Book ID: ', bg='#d5faa7')
  copies_book_id = Entry(root, width=30)
+
 # List Borrower fields
  list_borrower_id_label = Label(root, text='Borrower ID: ', bg='#d5faa7')
  list_borrower_id = Entry(root, width=30)
+
+#List books retuned late within range
+purpose_label = Label(root, text="List book loans returned late within a due date range and  how many days late.")
+due_start_label = Label(root, text="Start Due Date (YYYY-MM-DD):", bg="#d5faa7")
+due_start = Entry(root, width=30)
+due_end_label = Label(root, text="End Due Date (YYYY-MM-DD):", bg="#d5faa7")
+due_end = Entry(root, width=30)
+
 # Shared confirm/cancel buttons (hidden at start)
  confirm_btn = Button(root, text='Submit')
  cancel_btn = Button(root, text='Cancel', command=lambda: hide_all())
