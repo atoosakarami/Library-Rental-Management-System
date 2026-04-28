@@ -173,6 +173,13 @@ copies_book_id = Entry(root, width=30)
 list_borrower_id_label = Label(root, text='Borrower ID: ', bg='#d5faa7')
 list_borrower_id = Entry(root, width=30)
 
+#List books retuned late within range
+purpose_label = Label(root, text="List book loans returned late within a due date range and  how many days late.")
+due_start_label = Label(root, text="Start Due Date (YYYY-MM-DD):", bg="#d5faa7")
+due_start = Entry(root, width=30)
+due_end_label = Label(root, text="End Due Date (YYYY-MM-DD):", bg="#d5faa7")
+due_end = Entry(root, width=30)
+
 # Shared confirm/cancel buttons (hidden at start)
 confirm_btn = Button(root, text='Submit')
 cancel_btn = Button(root, text='Cancel', command=lambda: hide_all())
@@ -185,6 +192,7 @@ main_buttons_config = [
     ('Add New Book', lambda: show_form('add_book')),
     ('List Copies', lambda: show_form('list_copies')),
     ('List Borrower', lambda: show_form('list_borrower')),
+    ("Late Returns by Due Date", lambda: show_form("late_returns")),
 ]
 
 main_buttons = []
@@ -214,7 +222,9 @@ def hide_all_inputs():
         book_author_label, book_author,
         copies_book_id_label, copies_book_id,
         list_borrower_id_label, list_borrower_id,
-        confirm_btn, cancel_btn,
+        confirm_btn, cancel_btn, purpose_label,
+        due_start_label, due_start,
+        due_end_label, due_end,
     ]
     for widget in all_inputs:
         widget.grid_forget()
