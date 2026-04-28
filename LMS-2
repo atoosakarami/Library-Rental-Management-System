@@ -1,0 +1,355 @@
+from tkinter import *
+import sqlite3
+
+root = Tk()
+root.title('Library Management System')
+root.geometry("400x400")
+root.config(bg="#d5faa7")
+
+db = sqlite3.connect('LMS.db')
+cursor = db.cursor()
+cursor.execute("PRAGMA foreign_keys = ON;")
+
+# ── Add schema  ──────────────────────────────────────────
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS PUBLISHER (
+    Publisher_Name VARCHAR(50) NOT NULL,
+    Phone VARCHAR(20),
+    Address VARCHAR(100),
+    PRIMARY KEY (Publisher_Name)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS LIBRARY_BRANCH (
+    Branch_Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Branch_Name VARCHAR(50) NOT NULL,
+    Branch_Address VARCHAR(100),
+    UNIQUE (Branch_Name)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS BORROWER (
+    Card_No INTEGER PRIMARY KEY AUTOINCREMENT,
+    Name VARCHAR(50) NOT NULL,
+    Address VARCHAR(100),
+    Phone VARCHAR(20)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS BOOK (
+    Book_Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Title VARCHAR(100) NOT NULL,
+    Publisher_name VARCHAR(50) NOT NULL,
+    FOREIGN KEY (Publisher_name) REFERENCES PUBLISHER (Publisher_Name)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS BOOK_LOANS (
+    Book_Id INT NOT NULL,
+    Branch_Id INT NOT NULL,
+    Card_No INT NOT NULL,
+    Date_Out DATE NOT NULL,
+    Due_Date DATE NOT NULL,
+    Returned_date DATE,
+    PRIMARY KEY(Book_Id, Branch_Id, Card_No, Date_Out),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Branch_Id) REFERENCES LIBRARY_BRANCH (Branch_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Card_No) REFERENCES BORROWER (Card_No)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    CHECK (Due_Date >= Date_Out)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS BOOK_COPIES (
+    Book_Id INT NOT NULL,
+    Branch_Id INT NOT NULL,
+    No_Of_Copies INT NOT NULL,
+    PRIMARY KEY (Book_Id, Branch_Id),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Branch_Id) REFERENCES LIBRARY_BRANCH (Branch_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS BOOK_AUTHORS (
+    Book_Id INT NOT NULL,
+    Author_Name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (Book_Id, Author_Name),
+    FOREIGN KEY(Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+""")
+
+cursor.execute("""
+CREATE TRIGGER IF NOT EXISTS update_copies_after_checkout
+AFTER INSERT ON BOOK_LOANS
+BEGIN
+    UPDATE BOOK_COPIES
+    SET No_Of_Copies = No_Of_Copies - 1
+    WHERE Book_Id = NEW.Book_Id
+    AND Branch_Id = NEW.Branch_Id;
+END;
+""")
+
+db.commit()
+
+# ── Hidden input widgets ──────────────────────────────────────────
+# Add Borrower fields
+f_name_label = Label(root, text='First Name: ', bg="#d5faa7")
+f_name = Entry(root, width=30)
+l_name_label = Label(root, text='Last Name: ', bg="#d5faa7")
+l_name = Entry(root, width=30)
+# Check Out Book fields
+book_id_label = Label(root, text='Book ID: ', bg="#d5faa7")
+book_id = Entry(root, width=30)
+borrower_id_label = Label(root, text='Borrower ID: ', bg="#d5faa7")
+borrower_id = Entry(root, width=30)
+
+# Add New Book fields
+book_title_label = Label(root, text='Book Title: ', bg="#d5faa7")
+book_title = Entry(root, width=30)
+book_author_label = Label(root, text='Author: ', bg="#d5faa7")
+book_author = Entry(root, width=30)
+
+# List Copies fields
+copies_book_id_label = Label(root, text='Book ID: ', bg="#d5faa7")
+copies_book_id = Entry(root, width=30)
+
+# List Borrower fields
+list_borrower_id_label = Label(root, text='Borrower ID: ', bg="#d5faa7")
+list_borrower_id = Entry(root, width=30)
+
+# Shared confirm/cancel buttons (hidden at start)
+confirm_btn = Button(root, text="Submit")
+cancel_btn = Button(root, text="Cancel", command=lambda: hide_all())
+
+# ── All main buttons ──────────────────────────────────────────────
+
+main_buttons_config = [
+    ("Add Borrower",   lambda: show_form("add_borrower")),
+    ("Check Out Book", lambda: show_form("checkout")),
+    ("Add New Book",   lambda: show_form("add_book")),
+    ("List Copies",    lambda: show_form("list_copies")),
+    ("List Borrower",  lambda: show_form("list_borrower")),
+]
+
+main_buttons = []
+for i, (label, cmd) in enumerate(main_buttons_config):
+    btn = Button(root, text=label, command=cmd, width=30)
+    btn.grid(row=i, column=0, columnspan=2, pady=5, padx=10)
+    main_buttons.append(btn)
+
+# ── Helper functions ──────────────────────────────────────────────
+
+def hide_main_buttons():
+    for btn in main_buttons:
+        btn.grid_forget()
+
+def show_main_buttons():
+    for i, btn in enumerate(main_buttons):
+        btn.grid(row=i, column=0, columnspan=2, pady=5, padx=10)
+
+def hide_all_inputs():
+    """Hide every input widget."""
+    all_inputs = [
+        f_name_label, f_name, l_name_label, l_name,
+        book_id_label, book_id, borrower_id_label, borrower_id,
+        book_title_label, book_title, book_author_label, book_author,
+        copies_book_id_label, copies_book_id,
+        list_borrower_id_label, list_borrower_id,
+        confirm_btn, cancel_btn,
+    ]
+    for w in all_inputs:
+        w.grid_forget()
+
+def clear_all_entries():
+    for entry in [f_name, l_name, book_id, borrower_id,
+                  book_title, book_author, copies_book_id, list_borrower_id]:
+        entry.delete(0, END)
+
+def hide_all():
+    """Cancel — go back to main menu."""
+    hide_all_inputs()
+    clear_all_entries()
+    show_main_buttons()
+
+# ── Show form based on which button was clicked ───────────────────
+
+def show_form(form_name):
+    hide_main_buttons()
+    hide_all_inputs()
+
+    forms = {
+        "add_borrower": [
+            (f_name_label, 0, 0), (f_name, 0, 1),
+            (l_name_label, 1, 0), (l_name, 1, 1),
+        ],
+        "checkout": [
+            (book_id_label, 0, 0),     (book_id, 0, 1),
+            (borrower_id_label, 1, 0), (borrower_id, 1, 1),
+        ],
+        "add_book": [
+            (book_title_label, 0, 0),  (book_title, 0, 1),
+            (book_author_label, 1, 0), (book_author, 1, 1),
+        ],
+        "list_copies": [
+            (copies_book_id_label, 0, 0), (copies_book_id, 0, 1),
+        ],
+        "list_borrower": [
+            (list_borrower_id_label, 0, 0), (list_borrower_id, 0, 1),
+        ],
+    }
+
+    # Grid the correct input widgets
+    for widget, row, col in forms[form_name]:
+        widget.grid(row=row, column=col, padx=10, pady=5)
+
+    # Map form to its submit function
+    submit_commands = {
+        "add_borrower":  submit_borrower,
+        "checkout":      submit_checkout,
+        "add_book":      submit_book,
+        "list_copies":   submit_list_copies,
+        "list_borrower": submit_list_borrower,
+    }
+
+    next_row = len(forms[form_name]) // 2  # one row per label+entry pair
+    confirm_btn.config(command=submit_commands[form_name])
+    confirm_btn.grid(row=next_row, column=0, pady=10, padx=10, ipadx=60)
+    cancel_btn.grid(row=next_row, column=1, pady=10, padx=10, ipadx=60)
+
+# ── Submit functions ──────────────────────────────────────────────
+
+def submit_borrower():
+    try:
+        cursor.execute("""
+            INSERT INTO BORROWER (Name)
+            VALUES (?)
+        """, (f_name.get() + " " + l_name.get(),))
+
+        db.commit()
+        print("Borrower added!")
+
+    except sqlite3.Error as e:
+        print("Error:", e)
+
+    hide_all()
+
+def submit_checkout():
+    try:
+        cursor.execute("""
+            INSERT INTO BOOK_LOANS
+            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date, Returned_date)
+            VALUES (?, ?, ?, DATE('now'), DATE('now','+7 days'), NULL)
+        """, (
+            book_id.get(),
+            1,  # default branch (change if needed)
+            borrower_id.get()
+        ))
+
+        db.commit()
+
+        # show updated copies
+        cursor.execute("""
+            SELECT Book_Id, Branch_Id, No_Of_Copies
+            FROM BOOK_COPIES
+            WHERE Book_Id = ?
+        """, (book_id.get(),))
+
+        rows = cursor.fetchall()
+
+        print("Updated copies:")
+        for r in rows:
+            print(r)
+
+    except sqlite3.Error as e:
+        print("Error:", e)
+
+    hide_all()
+
+def submit_book():
+    try:
+        # make sure publisher exists
+        cursor.execute("""
+            INSERT OR IGNORE INTO PUBLISHER (Publisher_Name)
+            VALUES (?)
+        """, ("DefaultPublisher",))
+
+        # insert book
+        cursor.execute("""
+            INSERT INTO BOOK (Title, Publisher_name)
+            VALUES (?, ?)
+        """, (book_title.get(), "DefaultPublisher"))
+
+        book_id = cursor.lastrowid
+
+        # insert author
+        cursor.execute("""
+            INSERT INTO BOOK_AUTHORS (Book_Id, Author_Name)
+            VALUES (?, ?)
+        """, (book_id, book_author.get()))
+
+        db.commit()
+        print("Book added!")
+
+    except sqlite3.Error as e:
+        print("Error:", e)
+
+    hide_all()
+
+def submit_list_copies():
+    try:
+        cursor.execute("""
+            SELECT Book_Id, Branch_Id, No_Of_Copies
+            FROM BOOK_COPIES
+            WHERE Book_Id = ?
+        """, (copies_book_id.get(),))
+
+        rows = cursor.fetchall()
+
+        print("Copies:")
+        for r in rows:
+            print(r)
+
+    except sqlite3.Error as e:
+        print("Error:", e)
+
+    hide_all()
+
+def submit_list_borrower():
+    try:
+        cursor.execute("""
+            SELECT Card_No, Name
+            FROM BORROWER
+            WHERE Card_No = ?
+        """, (list_borrower_id.get(),))
+
+        rows = cursor.fetchall()
+
+        print("Borrower:")
+        for r in rows:
+            print(r)
+
+    except sqlite3.Error as e:
+        print("Error:", e)
+
+    hide_all()
+
+root.mainloop()
