@@ -8,7 +8,10 @@ root.config(bg="#d5faa7")
 
 db = sqlite3.connect('LMS.db')
 cursor = db.cursor()
+print("Connected to DB!")
 cursor.execute("PRAGMA foreign_keys = ON;")
+cursor.execute("SELECT * FROM BOOK")
+print(cursor.fetchall())
 
 # ── Add schema  ──────────────────────────────────────────
 cursor.execute("""
@@ -235,6 +238,12 @@ def show_form(form_name):
     confirm_btn.grid(row=next_row, column=0, pady=10, padx=10, ipadx=60)
     cancel_btn.grid(row=next_row, column=1, pady=10, padx=10, ipadx=60)
 
+def display_results(rows):
+    result_box.delete("1.0", END)
+
+    for row in rows:
+        result_box.insert(END, str(row) + "\n")
+
 # ── Submit functions ──────────────────────────────────────────────
 
 def submit_borrower():
@@ -256,17 +265,66 @@ def submit_checkout():
     try:
         cursor.execute("""
             INSERT INTO BOOK_LOANS
-            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date, Returned_date)
-            VALUES (?, ?, ?, DATE('now'), DATE('now','+7 days'), NULL)
-        """, (
-            book_id.get(),
-            1,  # default branch (change if needed)
-            borrower_id.get()
-        ))
+            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date)
+            VALUES (?, ?, ?, DATE('now'), DATE('now','+7 days'))
+        """, (book_id.get(), 1, borrower_id.get()))
 
         db.commit()
 
-        # show updated copies
+        cursor.execute("""
+            SELECT *
+            FROM BOOK_COPIES
+            WHERE Book_Id = ?
+        """, (book_id.get(),))
+
+        rows = cursor.fetchall()
+
+        display_results(rows)
+
+    except sqlite3.Error as e:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Error: " + str(e))
+
+   
+
+def submit_book():
+    try:
+        cursor.execute("""
+            INSERT INTO BOOK (Title, Publisher_name)
+            VALUES (?, ?)
+        """, (book_title.get(), "DefaultPublisher"))
+
+        book_id = cursor.lastrowid
+
+        cursor.execute("""
+            INSERT INTO BOOK_AUTHORS (Book_Id, Author_Name)
+            VALUES (?, ?)
+        """, (book_id, book_author.get()))
+
+        db.commit()
+
+        result_box.delete("1.0", END)
+        result_box.insert(
+            END,
+            f"Book Added Successfully!\n\n"
+            f"Title: {book_title.get()}\n"
+            f"Author: {book_author.get()}\n"
+        )
+
+    except sqlite3.Error as e:
+        result_box.delete("1.0", END)
+        result_box.insert(END, " Error: " + str(e))
+
+def submit_checkout():
+    try:
+        cursor.execute("""
+            INSERT INTO BOOK_LOANS
+            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date)
+            VALUES (?, ?, ?, DATE('now'), DATE('now','+30 days'))
+        """, (book_id.get(), 1, borrower_id.get()))
+
+        db.commit()
+
         cursor.execute("""
             SELECT Book_Id, Branch_Id, No_Of_Copies
             FROM BOOK_COPIES
@@ -275,81 +333,61 @@ def submit_checkout():
 
         rows = cursor.fetchall()
 
-        print("Updated copies:")
-        for r in rows:
-            print(r)
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Book successfully checked out!\n\n")
+
+        for row in rows:
+            result_box.insert(
+                END,
+                f"Book ID: {row[0]}\n"
+                f"Branch ID: {row[1]}\n"
+                f"Copies Remaining: {row[2]}\n"
+                f"----------------------\n"
+            )
 
     except sqlite3.Error as e:
-        print("Error:", e)
-
-    hide_all()
-
-def submit_book():
-    try:
-        # make sure publisher exists
-        cursor.execute("""
-            INSERT OR IGNORE INTO PUBLISHER (Publisher_Name)
-            VALUES (?)
-        """, ("DefaultPublisher",))
-
-        # insert book
-        cursor.execute("""
-            INSERT INTO BOOK (Title, Publisher_name)
-            VALUES (?, ?)
-        """, (book_title.get(), "DefaultPublisher"))
-
-        book_id = cursor.lastrowid
-
-        # insert author
-        cursor.execute("""
-            INSERT INTO BOOK_AUTHORS (Book_Id, Author_Name)
-            VALUES (?, ?)
-        """, (book_id, book_author.get()))
-
-        db.commit()
-        print("Book added!")
-
-    except sqlite3.Error as e:
-        print("Error:", e)
-
-    hide_all()
+        result_box.delete("1.0", END)
+        result_box.insert(END, " Error: " + str(e))
 
 def submit_list_copies():
-    try:
-        cursor.execute("""
-            SELECT Book_Id, Branch_Id, No_Of_Copies
-            FROM BOOK_COPIES
-            WHERE Book_Id = ?
-        """, (copies_book_id.get(),))
+    cursor.execute("""
+        SELECT Book_Id, Branch_Id, No_Of_Copies
+        FROM BOOK_COPIES
+        WHERE Book_Id = ?
+    """, (copies_book_id.get(),))
 
-        rows = cursor.fetchall()
+    rows = cursor.fetchall()
 
-        print("Copies:")
-        for r in rows:
-            print(r)
+    result_box.delete("1.0", END)
+    result_box.insert(END, "Available Copies:\n\n")
 
-    except sqlite3.Error as e:
-        print("Error:", e)
-
+    for row in rows:
+        result_box.insert(
+            END,
+            f"Book ID: {row[0]} | Branch: {row[1]} | Copies: {row[2]}\n"
+        )
     hide_all()
 
 def submit_list_borrower():
     try:
         cursor.execute("""
-            SELECT Card_No, Name
+            SELECT *
             FROM BORROWER
             WHERE Card_No = ?
         """, (list_borrower_id.get(),))
 
         rows = cursor.fetchall()
 
-        print("Borrower:")
-        for r in rows:
-            print(r)
+        display_results(rows)
 
     except sqlite3.Error as e:
-        print("Error:", e)
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Error: " + str(e))
 
     hide_all()
+
+
+result_box = Text(root, height=10, width=45)
+result_box.grid(row=10, column=0, columnspan=2)
 
 root.mainloop()
