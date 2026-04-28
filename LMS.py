@@ -3,7 +3,7 @@ import sqlite3
 
 root = Tk()
 root.title('Library Management System')
-root.geometry('400x400')
+root.geometry('400x600')
 root.config(bg='#d5faa7')
 
 db = sqlite3.connect('LMS.db')
@@ -109,6 +109,37 @@ BEGIN
 END;
 ''')
 
+# Keep per-branch late fee configuration and a reusable reporting view.
+cursor.execute("PRAGMA table_info(LIBRARY_BRANCH)")
+branch_columns = [col[1] for col in cursor.fetchall()]
+if 'LateFee' not in branch_columns:
+    cursor.execute("ALTER TABLE LIBRARY_BRANCH ADD COLUMN LateFee REAL DEFAULT 0.25")
+    cursor.execute("UPDATE LIBRARY_BRANCH SET LateFee = 0.25 WHERE LateFee IS NULL OR LateFee = 0")
+
+cursor.execute("DROP VIEW IF EXISTS vBookLoanInfo")
+cursor.execute('''
+CREATE VIEW vBookLoanInfo AS
+SELECT
+    BORROWER.Card_No,
+    BORROWER.Name AS Borrower_Name,
+    BOOK.Book_Id,
+    BOOK.Title AS Book_Title,
+    BOOK_LOANS.Branch_Id,
+    BOOK_LOANS.Date_Out,
+    BOOK_LOANS.Due_Date,
+    BOOK_LOANS.Returned_Date,
+    MAX(0, CAST(ROUND(JULIANDAY(COALESCE(BOOK_LOANS.Returned_Date, DATE('now'))) - JULIANDAY(BOOK_LOANS.Due_Date)) AS INT)) AS Days_Late,
+    ROUND(
+        MAX(0, CAST(ROUND(JULIANDAY(COALESCE(BOOK_LOANS.Returned_Date, DATE('now'))) - JULIANDAY(BOOK_LOANS.Due_Date)) AS INT))
+        * LIBRARY_BRANCH.LateFee,
+        2
+    ) AS LateFeeBalance
+FROM BOOK_LOANS
+INNER JOIN BORROWER ON BOOK_LOANS.Card_No = BORROWER.Card_No
+INNER JOIN BOOK ON BOOK_LOANS.Book_Id = BOOK.Book_Id
+INNER JOIN LIBRARY_BRANCH ON BOOK_LOANS.Branch_Id = LIBRARY_BRANCH.Branch_Id
+''')
+
 db.commit()
 
 # -- Helper records -------------------------------------------------------------
@@ -129,15 +160,15 @@ def ensure_default_publisher():
 
 def ensure_five_branches():
     branch_seed = [
-        (1, 'Main Branch', 'Default Address 1'),
-        (2, 'West Branch', 'Default Address 2'),
-        (3, 'East Branch', 'Default Address 3'),
-        (4, 'North Branch', 'Default Address 4'),
-        (5, 'South Branch', 'Default Address 5'),
+        (1, 'Main Branch', 'Default Address 1', 0.25),
+        (2, 'West Branch', 'Default Address 2', 0.25),
+        (3, 'East Branch', 'Default Address 3', 0.25),
+        (4, 'North Branch', 'Default Address 4', 0.25),
+        (5, 'South Branch', 'Default Address 5', 0.25),
     ]
     cursor.executemany('''
-        INSERT OR IGNORE INTO LIBRARY_BRANCH (Branch_Id, Branch_Name, Branch_Address)
-        VALUES (?, ?, ?)
+        INSERT OR IGNORE INTO LIBRARY_BRANCH (Branch_Id, Branch_Name, Branch_Address, LateFee)
+        VALUES (?, ?, ?, ?)
     ''', branch_seed)
 
 
@@ -180,6 +211,24 @@ due_start = Entry(root, width=30)
 due_end_label = Label(root, text="End Due Date (YYYY-MM-DD):", bg="#d5faa7")
 due_end = Entry(root, width=30)
 
+# Copies loaned out by title
+loaned_title_label = Label(root, text='Book Title: ', bg='#d5faa7')
+loaned_title_entry = Entry(root, width=30)
+
+# Borrower late fee balance inputs
+balance_borrower_id_label = Label(root, text='Borrower ID (optional): ', bg='#d5faa7')
+balance_borrower_id_entry = Entry(root, width=30)
+balance_name_label = Label(root, text='Name / Part of Name (opt): ', bg='#d5faa7')
+balance_name_entry = Entry(root, width=30)
+
+# Book info + late fee inputs
+book_info_borrower_id_label = Label(root, text='Borrower ID (required): ', bg='#d5faa7')
+book_info_borrower_id_entry = Entry(root, width=30)
+book_info_book_id_label = Label(root, text='Book ID (optional): ', bg='#d5faa7')
+book_info_book_id_entry = Entry(root, width=30)
+book_info_title_label = Label(root, text='Book Title / Part (opt): ', bg='#d5faa7')
+book_info_title_entry = Entry(root, width=30)
+
 # Shared confirm/cancel buttons (hidden at start)
 confirm_btn = Button(root, text='Submit')
 cancel_btn = Button(root, text='Cancel', command=lambda: hide_all())
@@ -193,6 +242,9 @@ main_buttons_config = [
     ('List Copies', lambda: show_form('list_copies')),
     ('List Borrower', lambda: show_form('list_borrower')),
     ("Late Returns by Due Date", lambda: show_form("late_returns")),
+    ('Copies Loaned Out by Title', lambda: show_form('copies_loaned')),
+    ('Borrower Late Fee Balance', lambda: show_form('borrower_balance')),
+    ('Book Info with Late Fee', lambda: show_form('book_info_latefee')),
 ]
 
 main_buttons = []
@@ -225,6 +277,12 @@ def hide_all_inputs():
         confirm_btn, cancel_btn, purpose_label,
         due_start_label, due_start,
         due_end_label, due_end,
+        loaned_title_label, loaned_title_entry,
+        balance_borrower_id_label, balance_borrower_id_entry,
+        balance_name_label, balance_name_entry,
+        book_info_borrower_id_label, book_info_borrower_id_entry,
+        book_info_book_id_label, book_info_book_id_entry,
+        book_info_title_label, book_info_title_entry,
     ]
     for widget in all_inputs:
         widget.grid_forget()
@@ -236,6 +294,10 @@ def clear_all_entries():
         book_id, borrower_id,
         book_title, book_publisher, book_author,
         copies_book_id, list_borrower_id,
+        due_start, due_end,
+        loaned_title_entry,
+        balance_borrower_id_entry, balance_name_entry,
+        book_info_borrower_id_entry, book_info_book_id_entry, book_info_title_entry,
     ]:
         entry.delete(0, END)
 
@@ -250,6 +312,14 @@ def display_results(rows):
 
     for row in rows:
         result_box.insert(END, str(row) + "\n")
+
+
+def display_table(headers, rows):
+    result_box.delete("1.0", END)
+    result_box.insert(END, " | ".join(headers) + "\n")
+    result_box.insert(END, "-" * 80 + "\n")
+    for row in rows:
+        result_box.insert(END, " | ".join(str(value) for value in row) + "\n")
 
 # -- Form routing ---------------------------------------------------------------
 
@@ -282,6 +352,18 @@ def show_form(form_name):
             (due_start_label, 0, 0), (due_start, 0, 1),
             (due_end_label, 1, 0), (due_end, 1, 1),
         ],
+        'copies_loaned': [
+            (loaned_title_label, 0, 0), (loaned_title_entry, 0, 1),
+        ],
+        'borrower_balance': [
+            (balance_borrower_id_label, 0, 0), (balance_borrower_id_entry, 0, 1),
+            (balance_name_label, 1, 0), (balance_name_entry, 1, 1),
+        ],
+        'book_info_latefee': [
+            (book_info_borrower_id_label, 0, 0), (book_info_borrower_id_entry, 0, 1),
+            (book_info_book_id_label, 1, 0), (book_info_book_id_entry, 1, 1),
+            (book_info_title_label, 2, 0), (book_info_title_entry, 2, 1),
+        ],
     }
 
     for widget, row, col in forms[form_name]:
@@ -294,6 +376,9 @@ def show_form(form_name):
         'list_copies': submit_list_copies,
         'list_borrower': submit_list_borrower,
         "late_returns": submit_late_returns,
+        'copies_loaned': submit_copies_loaned,
+        'borrower_balance': submit_borrower_balance,
+        'book_info_latefee': submit_book_info_latefee,
     }
 
     next_row = len(forms[form_name]) // 2
@@ -309,7 +394,8 @@ def submit_borrower():
     phone_num = phone.get().strip()
 
     if not name or not addr or not phone_num:
-        print('Error: Required fields missing')
+        result_box.delete("1.0", END)
+        result_box.insert(END, 'Error: Required fields missing')
         return
 
     try:
@@ -319,10 +405,15 @@ def submit_borrower():
         ''', (name, addr, phone_num))
         new_card_no = cursor.lastrowid
         db.commit()
-        print(f'Borrower added: {name}')
-        print(f'New card number: {new_card_no}')
+        result_box.delete("1.0", END)
+        result_box.insert(
+            END,
+            f'Borrower added: {name}\n'
+            f'New card number: {new_card_no}'
+        )
     except sqlite3.Error as e:
-        print(f'Database error: {e}')
+        result_box.delete("1.0", END)
+        result_box.insert(END, f'Database error: {e}')
 
     hide_all()
 
@@ -369,7 +460,8 @@ def submit_book():
     author = book_author.get().strip()
 
     if not title or not publisher or not author:
-        print('Error: Book title, publisher, and author are required')
+        result_box.delete("1.0", END)
+        result_box.insert(END, 'Error: Book title, publisher, and author are required')
         return
 
     try:
@@ -383,7 +475,8 @@ def submit_book():
         publisher_exists = cursor.fetchone()
 
         if not publisher_exists:
-            print('Error: Publisher does not exist. Use an existing publisher name.')
+            result_box.delete("1.0", END)
+            result_box.insert(END, 'Error: Publisher does not exist. Use an existing publisher name.')
             return
 
         cursor.execute('''
@@ -404,12 +497,17 @@ def submit_book():
         ''', copies_seed)
 
         db.commit()
-        print(f'Book added: {title} (Book ID: {new_book_id})')
-        print(f'Publisher: {publisher}')
-        print('Inserted 5 copies into branches 1-5.')
+        result_box.delete("1.0", END)
+        result_box.insert(
+            END,
+            f'Book added: {title} (Book ID: {new_book_id})\n'
+            f'Publisher: {publisher}\n'
+            'Inserted 5 copies into branches 1-5.'
+        )
 
     except sqlite3.Error as e:
-        print(f'Database error: {e}')
+        result_box.delete("1.0", END)
+        result_box.insert(END, f'Database error: {e}')
 
     hide_all()
 
@@ -513,8 +611,128 @@ def submit_late_returns():
         result_box.insert(END, "Error: " + str(e))
 
 
+def submit_copies_loaned():
+    title = loaned_title_entry.get().strip()
+    if not title:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Error: Please enter a book title")
+        return
+
+    query = '''
+        SELECT LB.Branch_Name, COUNT(*) AS Copies_Loaned
+        FROM BOOK_LOANS BL
+        JOIN BOOK B ON BL.Book_Id = B.Book_Id
+        JOIN LIBRARY_BRANCH LB ON BL.Branch_Id = LB.Branch_Id
+        WHERE B.Title = ? AND BL.Returned_Date IS NULL
+        GROUP BY LB.Branch_Name
+        ORDER BY LB.Branch_Name
+    '''
+    cursor.execute(query, (title,))
+    rows = cursor.fetchall()
+
+    if rows:
+        display_table(["Branch Name", "Copies Loaned (Not Returned)"], rows)
+    else:
+        result_box.delete("1.0", END)
+        result_box.insert(END, f"No active (not returned) loans found for '{title}'.")
+
+    hide_all()
+
+
+def submit_borrower_balance():
+    borrower_id_val = balance_borrower_id_entry.get().strip()
+    name_part = balance_name_entry.get().strip()
+
+    query = '''
+        SELECT
+            Card_No,
+            Borrower_Name,
+            COALESCE(SUM(LateFeeBalance), 0) AS TotalLateFeeBalance
+        FROM vBookLoanInfo
+        WHERE 1=1
+    '''
+    params = []
+
+    if borrower_id_val:
+        query += " AND Card_No = ?"
+        params.append(borrower_id_val)
+    if name_part:
+        query += " AND Borrower_Name LIKE ?"
+        params.append(f"%{name_part}%")
+
+    query += " GROUP BY Card_No, Borrower_Name"
+    if not borrower_id_val and not name_part:
+        query += " ORDER BY TotalLateFeeBalance DESC"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    if rows:
+        formatted_rows = []
+        for card_no, name, balance in rows:
+            formatted_rows.append((card_no, name, f"${balance:.2f}"))
+        display_table(["Card_No", "Name", "Total Balance"], formatted_rows)
+    else:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "No borrowers found matching criteria.")
+
+    hide_all()
+
+
+def submit_book_info_latefee():
+    borrower_id_val = book_info_borrower_id_entry.get().strip()
+    book_id_val = book_info_book_id_entry.get().strip()
+    title_part = book_info_title_entry.get().strip()
+
+    if not borrower_id_val:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Error: Borrower ID is required for this search")
+        return
+
+    query = '''
+        SELECT
+            Book_Title,
+            Book_Id,
+            Branch_Id,
+            Date_Out,
+            Due_Date,
+            Returned_Date,
+            Days_Late,
+            CASE
+                WHEN LateFeeBalance IS NULL OR LateFeeBalance = 0 THEN 'Non-Applicable'
+                ELSE '$' || printf('%.2f', LateFeeBalance)
+            END AS LateFeeDisplay
+        FROM vBookLoanInfo
+        WHERE Card_No = ?
+    '''
+    params = [borrower_id_val]
+
+    if book_id_val:
+        query += " AND Book_Id = ?"
+        params.append(book_id_val)
+    if title_part:
+        query += " AND Book_Title LIKE ?"
+        params.append(f"%{title_part}%")
+
+    query += " ORDER BY LateFeeBalance DESC"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    if rows:
+        display_table(
+            ["Book Title", "Book ID", "Branch ID", "Date Out", "Due Date", "Returned Date", "Days Late", "Late Fee"],
+            rows,
+        )
+    else:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "No book loans found for the given borrower and criteria.")
+
+    hide_all()
+
+
 
 result_box = Text(root, height=10, width=45)
-result_box.grid(row=10, column=0, columnspan=2)
+result_box.grid(row=20, column=0, columnspan=2)
 
 root.mainloop()
