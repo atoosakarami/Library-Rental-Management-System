@@ -1,0 +1,825 @@
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
+import sqlite3
+
+root = tk.Tk()
+root.title('Library Management System')
+root.geometry('500x600')
+root.config(bg='#d5faa7')
+
+db = sqlite3.connect('LMS.db')
+cursor = db.cursor()
+cursor.execute('PRAGMA foreign_keys = ON;')
+
+# ---------- Table Creation ----------
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS PUBLISHER (
+    Publisher_Name VARCHAR(50) NOT NULL,
+    Phone VARCHAR(20),
+    Address VARCHAR(100),
+    PRIMARY KEY (Publisher_Name)
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS LIBRARY_BRANCH (
+    Branch_Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Branch_Name VARCHAR(50) NOT NULL,
+    Branch_Address VARCHAR(100),
+    UNIQUE (Branch_Name)
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BORROWER (
+    Card_No INTEGER PRIMARY KEY AUTOINCREMENT,
+    Name VARCHAR(50) NOT NULL,
+    Address VARCHAR(100),
+    Phone VARCHAR(20)
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK (
+    Book_Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Title VARCHAR(100) NOT NULL,
+    Publisher_Name VARCHAR(50) NOT NULL,
+    FOREIGN KEY (Publisher_Name) REFERENCES PUBLISHER (Publisher_Name)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK_LOANS (
+    Book_Id INT NOT NULL,
+    Branch_Id INT NOT NULL,
+    Card_No INT NOT NULL,
+    Date_Out DATE NOT NULL,
+    Due_Date DATE NOT NULL,
+    Returned_Date DATE,
+    PRIMARY KEY (Book_Id, Branch_Id, Card_No, Date_Out),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Branch_Id) REFERENCES LIBRARY_BRANCH (Branch_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Card_No) REFERENCES BORROWER (Card_No)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    CHECK (Due_Date >= Date_Out)
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK_COPIES (
+    Book_Id INT NOT NULL,
+    Branch_Id INT NOT NULL,
+    No_Of_Copies INT NOT NULL,
+    PRIMARY KEY (Book_Id, Branch_Id),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Branch_Id) REFERENCES LIBRARY_BRANCH (Branch_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK_AUTHORS (
+    Book_Id INT NOT NULL,
+    Author_Name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (Book_Id, Author_Name),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+''')
+
+cursor.execute('''
+CREATE TRIGGER IF NOT EXISTS update_copies_after_checkout
+AFTER INSERT ON BOOK_LOANS
+BEGIN
+    UPDATE BOOK_COPIES
+    SET No_Of_Copies = No_Of_Copies - 1
+    WHERE Book_Id = NEW.Book_Id
+      AND Branch_Id = NEW.Branch_Id;
+END;
+''')
+
+
+cursor.execute("PRAGMA table_info(BOOK_LOANS)")
+columns = [col[1] for col in cursor.fetchall()]
+if 'Late' not in columns:
+    cursor.execute("ALTER TABLE BOOK_LOANS ADD COLUMN Late INTEGER DEFAULT 0")
+    cursor.execute("UPDATE BOOK_LOANS SET Late = 1 WHERE Returned_Date > Due_Date")
+    cursor.execute("UPDATE BOOK_LOANS SET Late = 0 WHERE Returned_Date <= Due_Date OR Returned_Date IS NULL")
+
+cursor.execute("PRAGMA table_info(LIBRARY_BRANCH)")
+branch_columns = [col[1] for col in cursor.fetchall()]
+if 'LateFee' not in branch_columns:
+    cursor.execute("ALTER TABLE LIBRARY_BRANCH ADD COLUMN LateFee REAL DEFAULT 0.25")
+    cursor.execute("UPDATE LIBRARY_BRANCH SET LateFee = 0.25 WHERE LateFee = 0")
+
+cursor.execute("DROP VIEW IF EXISTS vBookLoanInfo")
+cursor.execute('''
+CREATE VIEW vBookLoanInfo AS
+SELECT 
+    BORROWER.Card_No,
+    BORROWER.Name AS Borrower_Name,
+    BOOK_LOANS.Date_Out,
+    BOOK_LOANS.Due_Date,
+    BOOK_LOANS.Returned_Date,
+    CAST(ROUND(JULIANDAY(COALESCE(BOOK_LOANS.Returned_Date, DATE('now'))) - JULIANDAY(BOOK_LOANS.Date_Out)) AS INT) AS TotalDays,
+    BOOK.Title AS Book_Title,
+    BOOK_LOANS.Branch_Id,
+    -- Days late (0 if not late or not returned)
+    MAX(0, CAST(ROUND(JULIANDAY(COALESCE(BOOK_LOANS.Returned_Date, DATE('now'))) - JULIANDAY(BOOK_LOANS.Due_Date)) AS INT)) AS Days_Late,
+    -- LateFeeBalance: days late * branch specific late fee per day
+    ROUND(MAX(0, CAST(ROUND(JULIANDAY(COALESCE(BOOK_LOANS.Returned_Date, DATE('now'))) - JULIANDAY(BOOK_LOANS.Due_Date)) AS INT)) * LIBRARY_BRANCH.LateFee, 2) AS LateFeeBalance
+FROM BOOK_LOANS
+INNER JOIN BORROWER ON BOOK_LOANS.Card_No = BORROWER.Card_No
+INNER JOIN BOOK ON BOOK_LOANS.Book_Id = BOOK.Book_Id
+INNER JOIN LIBRARY_BRANCH ON BOOK_LOANS.Branch_Id = LIBRARY_BRANCH.Branch_Id
+''')
+
+db.commit()
+
+# ---------- Helper Functions ----------
+def ensure_default_branch():
+    cursor.execute('''
+        INSERT OR IGNORE INTO LIBRARY_BRANCH (Branch_Id, Branch_Name, Branch_Address, LateFee)
+        VALUES (1, 'Main Branch', 'Default Address', 0.25)
+    ''')
+
+def ensure_five_branches():
+    branch_seed = [
+        (1, 'Main Branch', 'Default Address 1', 0.25),
+        (2, 'West Branch', 'Default Address 2', 0.25),
+        (3, 'East Branch', 'Default Address 3', 0.25),
+        (4, 'North Branch', 'Default Address 4', 0.25),
+        (5, 'South Branch', 'Default Address 5', 0.25),
+    ]
+    cursor.executemany('''
+        INSERT OR IGNORE INTO LIBRARY_BRANCH (Branch_Id, Branch_Name, Branch_Address, LateFee)
+        VALUES (?, ?, ?, ?)
+    ''', branch_seed)
+
+# ---------- Utility: Display Results in a New Window ----------
+def show_results(title, columns, rows):
+    """Display query results in a new scrollable window."""
+    win = tk.Toplevel(root)
+    win.title(title)
+    win.geometry("700x400")
+    text_area = scrolledtext.ScrolledText(win, wrap=tk.NONE, width=100, height=20)
+    text_area.pack(fill=tk.BOTH, expand=True)
+    # Header
+    header = "\t".join(columns) + "\n" + "-" * 80 + "\n"
+    text_area.insert(tk.END, header)
+    for row in rows:
+        row_str = "\t".join(str(val) for val in row) + "\n"
+        text_area.insert(tk.END, row_str)
+    text_area.config(state=tk.DISABLED)
+
+# ---------- Input Form Management ----------
+borrower_name_label = tk.Label(root, text='Borrower Name: ', bg='#d5faa7')
+borrower_name = tk.Entry(root, width=30)
+address_label = tk.Label(root, text='Address: ', bg='#d5faa7')
+address = tk.Entry(root, width=30)
+phone_label = tk.Label(root, text='Phone: ', bg='#d5faa7')
+phone = tk.Entry(root, width=30)
+
+book_id_label = tk.Label(root, text='Book ID: ', bg='#d5faa7')
+book_id = tk.Entry(root, width=30)
+borrower_id_label = tk.Label(root, text='Borrower ID: ', bg='#d5faa7')
+borrower_id = tk.Entry(root, width=30)
+
+book_title_label = tk.Label(root, text='Book Title: ', bg='#d5faa7')
+book_title = tk.Entry(root, width=30)
+book_publisher_label = tk.Label(root, text='Publisher: ', bg='#d5faa7')
+book_publisher = tk.Entry(root, width=30)
+book_author_label = tk.Label(root, text='Author: ', bg='#d5faa7')
+book_author = tk.Entry(root, width=30)
+
+copies_book_id_label = tk.Label(root, text='Book ID: ', bg='#d5faa7')
+copies_book_id = tk.Entry(root, width=30)
+
+list_borrower_id_label = tk.Label(root, text='Borrower ID: ', bg='#d5faa7')
+list_borrower_id = tk.Entry(root, width=30)
+
+loaned_title_label = tk.Label(root, text='Book Title: ', bg='#d5faa7')
+loaned_title_entry = tk.Entry(root, width=30)
+
+balance_borrower_id_label = tk.Label(root, text='Borrower ID (optional): ', bg='#d5faa7')
+balance_borrower_id_entry = tk.Entry(root, width=30)
+balance_name_label = tk.Label(root, text='Name / Part of Name (opt): ', bg='#d5faa7')
+balance_name_entry = tk.Entry(root, width=30)
+
+book_info_borrower_id_label = tk.Label(root, text='Borrower ID (required): ', bg='#d5faa7')
+book_info_borrower_id_entry = tk.Entry(root, width=30)
+book_info_book_id_label = tk.Label(root, text='Book ID (optional): ', bg='#d5faa7')
+book_info_book_id_entry = tk.Entry(root, width=30)
+book_info_title_label = tk.Label(root, text='Book Title / Part (opt): ', bg='#d5faa7')
+book_info_title_entry = tk.Entry(root, width=30)
+
+confirm_btn = tk.Button(root, text='Submit')
+cancel_btn = tk.Button(root, text='Cancel', command=lambda: hide_all())
+
+def hide_all_inputs():
+    all_widgets = [
+        borrower_name_label, borrower_name, address_label, address, phone_label, phone,
+        book_id_label, book_id, borrower_id_label, borrower_id,
+        book_title_label, book_title, book_publisher_label, book_publisher,
+        book_author_label, book_author,
+        copies_book_id_label, copies_book_id,
+        list_borrower_id_label, list_borrower_id,
+        loaned_title_label, loaned_title_entry,
+        balance_borrower_id_label, balance_borrower_id_entry,
+        balance_name_label, balance_name_entry,
+        book_info_borrower_id_label, book_info_borrower_id_entry,
+        book_info_book_id_label, book_info_book_id_entry,
+        book_info_title_label, book_info_title_entry,
+        confirm_btn, cancel_btn,
+    ]
+    for w in all_widgets:
+        w.grid_forget()
+
+def clear_all_entries():
+    entries = [
+        borrower_name, address, phone,
+        book_id, borrower_id,
+        book_title, book_publisher, book_author,
+        copies_book_id, list_borrower_id,
+        loaned_title_entry,
+        balance_borrower_id_entry, balance_name_entry,
+        book_info_borrower_id_entry, book_info_book_id_entry, book_info_title_entry,
+    ]
+    for e in entries:
+        e.delete(0, tk.END)
+
+def hide_all():
+    hide_all_inputs()
+    clear_all_entries()
+    show_main_buttons()
+
+# ---------- Main Buttons ----------
+main_buttons_config = [
+    ('Add Borrower', lambda: show_form('add_borrower')),
+    ('Check Out Book', lambda: show_form('checkout')),
+    ('Add New Book', lambda: show_form('add_book')),
+    ('List Copies per Branch', lambda: show_form('list_copies')),
+    ('List Borrower', lambda: show_form('list_borrower')),
+    ('Copies Loaned Out by Title', lambda: show_form('copies_loaned')),
+    ('Borrower Late Fee Balance', lambda: show_form('borrower_balance')),
+    ('Book Info with Late Fee', lambda: show_form('book_info_latefee')),
+]
+
+main_buttons = []
+for i, (label, cmd) in enumerate(main_buttons_config):
+    btn = tk.Button(root, text=label, command=cmd, width=35)
+    btn.grid(row=i, column=0, columnspan=2, pady=5, padx=10)
+    main_buttons.append(btn)
+
+def hide_main_buttons():
+    for btn in main_buttons:
+        btn.grid_forget()
+
+def show_main_buttons():
+    for i, btn in enumerate(main_buttons):
+        btn.grid(row=i, column=0, columnspan=2, pady=5, padx=10)
+
+# ---------- Form Routing ----------
+def show_form(form_name):
+    hide_main_buttons()
+    hide_all_inputs()
+
+    forms = {
+        'add_borrower': [
+            (borrower_name_label, 0, 0), (borrower_name, 0, 1),
+            (address_label, 1, 0), (address, 1, 1),
+            (phone_label, 2, 0), (phone, 2, 1),
+        ],
+        'checkout': [
+            (book_id_label, 0, 0), (book_id, 0, 1),
+            (borrower_id_label, 1, 0), (borrower_id, 1, 1),
+        ],
+        'add_book': [
+            (book_title_label, 0, 0), (book_title, 0, 1),
+            (book_publisher_label, 1, 0), (book_publisher, 1, 1),
+            (book_author_label, 2, 0), (book_author, 2, 1),
+        ],
+        'list_copies': [
+            (copies_book_id_label, 0, 0), (copies_book_id, 0, 1),
+        ],
+        'list_borrower': [
+            (list_borrower_id_label, 0, 0), (list_borrower_id, 0, 1),
+        ],
+        'copies_loaned': [
+            (loaned_title_label, 0, 0), (loaned_title_entry, 0, 1),
+        ],
+        'borrower_balance': [
+            (balance_borrower_id_label, 0, 0), (balance_borrower_id_entry, 0, 1),
+            (balance_name_label, 1, 0), (balance_name_entry, 1, 1),
+        ],
+        'book_info_latefee': [
+            (book_info_borrower_id_label, 0, 0), (book_info_borrower_id_entry, 0, 1),
+            (book_info_book_id_label, 1, 0), (book_info_book_id_entry, 1, 1),
+            (book_info_title_label, 2, 0), (book_info_title_entry, 2, 1),
+        ],
+    }
+
+    for widget, row, col in forms[form_name]:
+        widget.grid(row=row, column=col, padx=10, pady=5)
+
+    submit_commands = {
+        'add_borrower': submit_borrower,
+        'checkout': submit_checkout,
+        'add_book': submit_book,
+        'list_copies': submit_list_copies,
+        'list_borrower': submit_list_borrower,
+        'copies_loaned': submit_copies_loaned,
+        'borrower_balance': submit_borrower_balance,
+        'book_info_latefee': submit_book_info_latefee,
+    }
+
+    next_row = len(forms[form_name]) // 2
+    confirm_btn.config(command=submit_commands[form_name])
+    confirm_btn.grid(row=next_row, column=0, pady=10, padx=10, ipadx=60)
+    cancel_btn.grid(row=next_row, column=1, pady=10, padx=10, ipadx=60)
+
+# ---------- Submission Handlers ----------
+def submit_borrower():
+    name = borrower_name.get().strip()
+    addr = address.get().strip()
+    phone_num = phone.get().strip()
+    if not name or not addr or not phone_num:
+        messagebox.showerror("Error", "All fields required for borrower")
+        return
+    try:
+        cursor.execute('INSERT INTO BORROWER (Name, Address, Phone) VALUES (?, ?, ?)', (name, addr, phone_num))
+        new_card_no = cursor.lastrowid
+        db.commit()
+        messagebox.showinfo("Success", f"Borrower '{name}' added.\nCard Number: {new_card_no}")
+    except sqlite3.Error as e:
+        messagebox.showerror("DB Error", str(e))
+    hide_all()
+
+def submit_checkout():
+    b_id = book_id.get().strip()
+    c_id = borrower_id.get().strip()
+    if not b_id or not c_id:
+        messagebox.showerror("Error", "Book ID and Borrower ID required")
+        return
+    try:
+        ensure_default_branch()
+        cursor.execute('''
+            INSERT INTO BOOK_LOANS (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date, Returned_Date)
+            VALUES (?, ?, ?, DATE('now'), DATE('now', '+7 days'), NULL)
+        ''', (b_id, 1, c_id))
+        db.commit()
+        cursor.execute('SELECT Book_Id, Branch_Id, No_Of_Copies FROM BOOK_COPIES WHERE Book_Id = ?', (b_id,))
+        rows = cursor.fetchall()
+        if rows:
+            show_results("Updated Book Copies", ["Book_Id", "Branch_Id", "No_Of_Copies"], rows)
+        else:
+            messagebox.showinfo("Checkout", "Book checked out, but no copy record found.")
+    except sqlite3.Error as e:
+        messagebox.showerror("Checkout Error", str(e))
+    hide_all()
+
+def submit_book():
+    title = book_title.get().strip()
+    publisher = book_publisher.get().strip()
+    author = book_author.get().strip()
+    if not title or not publisher or not author:
+        messagebox.showerror("Error", "Title, Publisher, Author required")
+        return
+    try:
+        ensure_five_branches()
+        cursor.execute('SELECT 1 FROM PUBLISHER WHERE Publisher_Name = ?', (publisher,))
+        if not cursor.fetchone():
+            messagebox.showerror("Error", f"Publisher '{publisher}' does not exist. Use existing publisher.")
+            return
+        cursor.execute('INSERT INTO BOOK (Title, Publisher_Name) VALUES (?, ?)', (title, publisher))
+        new_book_id = cursor.lastrowid
+        cursor.execute('INSERT INTO BOOK_AUTHORS (Book_Id, Author_Name) VALUES (?, ?)', (new_book_id, author))
+        copies_seed = [(new_book_id, bid, 5) for bid in range(1, 6)]
+        cursor.executemany('INSERT OR REPLACE INTO BOOK_COPIES (Book_Id, Branch_Id, No_Of_Copies) VALUES (?, ?, ?)', copies_seed)
+        db.commit()
+        messagebox.showinfo("Success", f"Book '{title}' added (ID: {new_book_id}) with 5 copies at each branch.")
+    except sqlite3.Error as e:
+        messagebox.showerror("DB Error", str(e))
+    hide_all()
+
+def submit_list_copies():
+    b_id = copies_book_id.get().strip()
+    if not b_id:
+        messagebox.showerror("Error", "Book ID required")
+        return
+    cursor.execute('SELECT Book_Id, Branch_Id, No_Of_Copies FROM BOOK_COPIES WHERE Book_Id = ?', (b_id,))
+    rows = cursor.fetchall()
+    if rows:
+        show_results("Book Copies", ["Book_Id", "Branch_Id", "No_Of_Copies"], rows)
+    else:
+        messagebox.showinfo("No Data", "No copy records found for this Book ID.")
+    hide_all()
+
+def submit_list_borrower():
+    c_id = list_borrower_id.get().strip()
+    if not c_id:
+        messagebox.showerror("Error", "Borrower ID required")
+        return
+    cursor.execute('SELECT Card_No, Name, Address, Phone FROM BORROWER WHERE Card_No = ?', (c_id,))
+    rows = cursor.fetchall()
+    if rows:
+        show_results("Borrower Info", ["Card_No", "Name", "Address", "Phone"], rows)
+    else:
+        messagebox.showinfo("No Data", "No borrower found with that ID.")
+    hide_all()
+
+# ---------- Requirement 4: Copies Loaned Out by Book Title ----------
+def submit_copies_loaned():
+    title = loaned_title_entry.get().strip()
+    if not title:
+        messagebox.showerror("Error", "Please enter a book title")
+        return
+    query = '''
+        SELECT LB.Branch_Name, COUNT(*) AS Copies_Loaned
+        FROM BOOK_LOANS BL
+        JOIN BOOK B ON BL.Book_Id = B.Book_Id
+        JOIN LIBRARY_BRANCH LB ON BL.Branch_Id = LB.Branch_Id
+        WHERE B.Title = ? AND BL.Returned_Date IS NULL
+        GROUP BY LB.Branch_Name
+        ORDER BY LB.Branch_Name
+    '''
+    cursor.execute(query, (title,))
+    rows = cursor.fetchall()
+    if rows:
+        show_results(f"Copies Loaned Out for '{title}'", ["Branch Name", "Copies Loaned (Not Returned)"], rows)
+    else:
+        messagebox.showinfo("No active loans", f"No active (not returned) loans found for '{title}'.")
+    hide_all()
+
+# ---------- Requirement 6a: Borrower Late Fee Balance ----------
+def submit_borrower_balance():
+    borrower_id_val = balance_borrower_id_entry.get().strip()
+    name_part = balance_name_entry.get().strip()
+    query = '''
+        SELECT 
+            Card_No, 
+            Borrower_Name, 
+            COALESCE(SUM(LateFeeBalance), 0) AS TotalLateFeeBalance
+        FROM vBookLoanInfo
+        WHERE 1=1
+    '''
+    params = []
+    if borrower_id_val:
+        query += " AND Card_No = ?"
+        params.append(borrower_id_val)
+    if name_part:
+        query += " AND Borrower_Name LIKE ?"
+        params.append(f"%{name_part}%")
+    query += " GROUP BY Card_No, Borrower_Name"
+    if not borrower_id_val and not name_part:
+        query += " ORDER BY TotalLateFeeBalance DESC"
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    if rows:
+        formatted_rows = []
+        for row in rows:
+            card, name, bal = row
+            formatted_rows.append((card, name, f"${bal:.2f}" if bal is not None else "$0.00"))
+        show_results("Borrower Late Fee Balance", ["Card_No", "Name", "Total Balance"], formatted_rows)
+    else:
+        messagebox.showinfo("No data", "No borrowers found matching criteria.")
+    hide_all()
+
+# ---------- Requirement 6b: Book Info with Late Fee (by Borrower + optional book filters) ----------
+def submit_book_info_latefee():
+    borrower_id_val = book_info_borrower_id_entry.get().strip()
+    if not borrower_id_val:
+        messagebox.showerror("Error", "Borrower ID is required for this search")
+        return
+    book_id_val = book_info_book_id_entry.get().strip()
+    title_part = book_info_title_entry.get().strip()
+    query = '''
+        SELECT 
+            Book_Title,
+            Book_Id,
+            Branch_Id,
+            Date_Out,
+            Due_Date,
+            Returned_Date,
+            Days_Late,
+            CASE 
+                WHEN LateFeeBalance IS NULL OR LateFeeBalance = 0 THEN 'Non-Applicable'
+                ELSE '$' || printf("%.2f", LateFeeBalance)
+            END AS LateFeeDisplay
+        FROM vBookLoanInfo
+        WHERE Card_No = ?
+    '''
+    params = [borrower_id_val]
+    if book_id_val:
+        query += " AND Book_Id = ?"
+        params.append(book_id_val)
+    if title_part:
+        query += " AND Book_Title LIKE ?"
+        params.append(f"%{title_part}%")
+    query += " ORDER BY LateFeeBalance DESC"
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    if rows:
+        columns = ["Book Title", "Book ID", "Branch ID", "Date Out", "Due Date", "Returned Date", "Days Late", "Late Fee"]
+        show_results(f"Book Loan Info for Borrower {borrower_id_val}", columns, rows)
+    else:
+        messagebox.showinfo("No data", "No book loans found for the given borrower and criteria.")
+    hide_all()
+
+root.mainloop()
+    Address VARCHAR(100),
+    Phone VARCHAR(20)
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK (
+    Book_Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Title VARCHAR(100) NOT NULL,
+    Publisher_Name VARCHAR(50) NOT NULL,
+    FOREIGN KEY (Publisher_Name) REFERENCES PUBLISHER (Publisher_Name)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK_LOANS (
+    Book_Id INT NOT NULL,
+    Branch_Id INT NOT NULL,
+    Card_No INT NOT NULL,
+    Date_Out DATE NOT NULL,
+    Due_Date DATE NOT NULL,
+    Returned_Date DATE,
+    PRIMARY KEY (Book_Id, Branch_Id, Card_No, Date_Out),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Branch_Id) REFERENCES LIBRARY_BRANCH (Branch_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Card_No) REFERENCES BORROWER (Card_No)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    CHECK (Due_Date >= Date_Out)
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK_COPIES (
+    Book_Id INT NOT NULL,
+    Branch_Id INT NOT NULL,
+    No_Of_Copies INT NOT NULL,
+    PRIMARY KEY (Book_Id, Branch_Id),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+    FOREIGN KEY (Branch_Id) REFERENCES LIBRARY_BRANCH (Branch_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS BOOK_AUTHORS (
+    Book_Id INT NOT NULL,
+    Author_Name VARCHAR(50) NOT NULL,
+    PRIMARY KEY (Book_Id, Author_Name),
+    FOREIGN KEY (Book_Id) REFERENCES BOOK (Book_Id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT
+)
+''')
+
+cursor.execute('''
+CREATE TRIGGER IF NOT EXISTS update_copies_after_checkout
+AFTER INSERT ON BOOK_LOANS
+BEGIN
+    UPDATE BOOK_COPIES
+    SET No_Of_Copies = No_Of_Copies - 1
+    WHERE Book_Id = NEW.Book_Id
+      AND Branch_Id = NEW.Branch_Id;
+END;
+''')
+
+db.commit()
+
+# -- UI -------------------------------------------------------------------------
+
+root.grid_rowconfigure(20, weight=1)
+
+loan_title_label = Label(root, text='Book Title (Loan Report): ', bg='#d5faa7')
+loan_title = Entry(root, width=30)
+
+late_borrower_label = Label(root, text='Borrower ID / Name (optional): ', bg='#d5faa7')
+late_borrower = Entry(root, width=30)
+
+view_borrower_id_label = Label(root, text='Borrower ID: ', bg='#d5faa7')
+view_borrower_id = Entry(root, width=30)
+
+view_book_id_label = Label(root, text='Book ID (optional): ', bg='#d5faa7')
+view_book_id = Entry(root, width=30)
+
+view_book_title_label = Label(root, text='Book Title (optional): ', bg='#d5faa7')
+view_book_title = Entry(root, width=30)
+
+# Buttons
+confirm_btn = Button(root, text='Submit')
+cancel_btn = Button(root, text='Cancel', command=lambda: hide_all())
+
+# -- MAIN BUTTONS --------------------------------------------------------------
+
+main_buttons_config = [
+    ('Add Borrower', lambda: show_form('add_borrower')),
+    ('Check Out Book', lambda: show_form('checkout')),
+    ('Add New Book', lambda: show_form('add_book')),
+    ('List Copies', lambda: show_form('list_copies')),
+    ('List Borrower', lambda: show_form('list_borrower')),
+
+    # NEW REQUIREMENTS
+    ('Loaned Copies by Title', lambda: show_form('loan_report')),
+    ('Borrower Late Fees', lambda: show_form('late_fees')),
+    ('Borrower Book View', lambda: show_form('borrower_book_view')),
+]
+
+main_buttons = []
+for i, (label, cmd) in enumerate(main_buttons_config):
+    btn = Button(root, text=label, command=cmd, width=30)
+    btn.grid(row=i, column=0, columnspan=2, pady=5)
+    main_buttons.append(btn)
+
+# -- HELPERS -------------------------------------------------------------------
+
+def hide_main_buttons():
+    for b in main_buttons:
+        b.grid_forget()
+
+def show_main_buttons():
+    for i, b in enumerate(main_buttons):
+        b.grid(row=i, column=0, columnspan=2, pady=5)
+
+def hide_all_inputs():
+    widgets = [
+        loan_title_label, loan_title,
+        late_borrower_label, late_borrower,
+        view_borrower_id_label, view_borrower_id,
+        view_book_id_label, view_book_id,
+        view_book_title_label, view_book_title,
+        confirm_btn, cancel_btn
+    ]
+    for w in widgets:
+        w.grid_forget()
+
+def clear_all():
+    for e in [loan_title, late_borrower, view_borrower_id, view_book_id, view_book_title]:
+        e.delete(0, END)
+
+def hide_all():
+    hide_all_inputs()
+    clear_all()
+    show_main_buttons()
+
+# -- FORM ROUTER ---------------------------------------------------------------
+
+def show_form(name):
+    hide_main_buttons()
+    hide_all_inputs()
+
+    if name == 'loan_report':
+        loan_title_label.grid(row=0, column=0)
+        loan_title.grid(row=0, column=1)
+
+        confirm_btn.config(command=submit_loan_report)
+        confirm_btn.grid(row=1, column=0)
+        cancel_btn.grid(row=1, column=1)
+
+    elif name == 'late_fees':
+        late_borrower_label.grid(row=0, column=0)
+        late_borrower.grid(row=0, column=1)
+
+        confirm_btn.config(command=submit_late_fees)
+        confirm_btn.grid(row=1, column=0)
+        cancel_btn.grid(row=1, column=1)
+
+    elif name == 'borrower_book_view':
+        view_borrower_id_label.grid(row=0, column=0)
+        view_borrower_id.grid(row=0, column=1)
+
+        view_book_id_label.grid(row=1, column=0)
+        view_book_id.grid(row=1, column=1)
+
+        view_book_title_label.grid(row=2, column=0)
+        view_book_title.grid(row=2, column=1)
+
+        confirm_btn.config(command=submit_borrower_book_view)
+        confirm_btn.grid(row=3, column=0)
+        cancel_btn.grid(row=3, column=1)
+
+def submit_loan_report():
+    title = loan_title.get().strip()
+
+    cursor.execute('''
+        SELECT LB.Branch_Id, LB.Branch_Name, COUNT(BL.Book_Id)
+        FROM BOOK_LOANS BL
+        JOIN BOOK B ON B.Book_Id = BL.Book_Id
+        JOIN LIBRARY_BRANCH LB ON LB.Branch_Id = BL.Branch_Id
+        WHERE B.Title LIKE ?
+        GROUP BY LB.Branch_Id, LB.Branch_Name
+    ''', ('%' + title + '%',))
+
+    rows = cursor.fetchall()
+    print("Loaned Copies per Branch:")
+    for r in rows:
+        print(r)
+
+    hide_all()
+
+def submit_late_fees():
+    keyword = late_borrower.get().strip()
+
+    query = '''
+        SELECT Card_No, Name,
+        printf('$%.2f',
+            COALESCE(SUM(
+                CASE
+                    WHEN julianday(COALESCE(Returned_Date, DATE('now'))) > julianday(Due_Date)
+                    THEN (julianday(COALESCE(Returned_Date, DATE('now'))) - julianday(Due_Date))
+                    ELSE 0
+                END
+            ),0)
+        ) AS LateFee
+        FROM BORROWER
+        LEFT JOIN BOOK_LOANS USING(Card_No)
+    '''
+
+    params = []
+    if keyword:
+        query += " WHERE Name LIKE ? OR CAST(Card_No AS TEXT) LIKE ?"
+        params = ['%' + keyword + '%', '%' + keyword + '%']
+
+    query += " GROUP BY Card_No ORDER BY LateFee DESC"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    print("Borrower Late Fees:")
+    for r in rows:
+        print(r)
+
+    hide_all()
+
+def submit_borrower_book_view():
+    bid = view_borrower_id.get().strip()
+    book_id_val = view_book_id.get().strip()
+    title = view_book_title.get().strip()
+
+    if not bid:
+        print("Borrower ID required")
+        return
+
+    query = '''
+        SELECT B.Book_Id, B.Title,
+        CASE
+            WHEN julianday(COALESCE(BL.Returned_Date, DATE('now'))) > julianday(BL.Due_Date)
+            THEN printf('$%.2f',
+                (julianday(COALESCE(BL.Returned_Date, DATE('now'))) - julianday(BL.Due_Date)))
+            ELSE 'Non-Applicable'
+        END AS LateFee
+        FROM BOOK_LOANS BL
+        JOIN BOOK B ON B.Book_Id = BL.Book_Id
+        WHERE BL.Card_No = ?
+    '''
+
+    params = [bid]
+
+    if book_id_val:
+        query += " AND B.Book_Id = ?"
+        params.append(book_id_val)
+
+    if title:
+        query += " AND B.Title LIKE ?"
+        params.append('%' + title + '%')
+
+    query += " ORDER BY LateFee DESC"
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    print("Borrower Book View:")
+    for r in rows:
+        print(r)
+
+    hide_all()
+
+root.mainloop()

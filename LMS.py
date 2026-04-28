@@ -173,6 +173,13 @@ copies_book_id = Entry(root, width=30)
 list_borrower_id_label = Label(root, text='Borrower ID: ', bg='#d5faa7')
 list_borrower_id = Entry(root, width=30)
 
+#List books retuned late within range
+purpose_label = Label(root, text="List book loans returned late within a due date range and  how many days late.")
+due_start_label = Label(root, text="Start Due Date (YYYY-MM-DD):", bg="#d5faa7")
+due_start = Entry(root, width=30)
+due_end_label = Label(root, text="End Due Date (YYYY-MM-DD):", bg="#d5faa7")
+due_end = Entry(root, width=30)
+
 # Shared confirm/cancel buttons (hidden at start)
 confirm_btn = Button(root, text='Submit')
 cancel_btn = Button(root, text='Cancel', command=lambda: hide_all())
@@ -185,6 +192,7 @@ main_buttons_config = [
     ('Add New Book', lambda: show_form('add_book')),
     ('List Copies', lambda: show_form('list_copies')),
     ('List Borrower', lambda: show_form('list_borrower')),
+    ("Late Returns by Due Date", lambda: show_form("late_returns")),
 ]
 
 main_buttons = []
@@ -214,7 +222,9 @@ def hide_all_inputs():
         book_author_label, book_author,
         copies_book_id_label, copies_book_id,
         list_borrower_id_label, list_borrower_id,
-        confirm_btn, cancel_btn,
+        confirm_btn, cancel_btn, purpose_label,
+        due_start_label, due_start,
+        due_end_label, due_end,
     ]
     for widget in all_inputs:
         widget.grid_forget()
@@ -235,6 +245,11 @@ def hide_all():
     clear_all_entries()
     show_main_buttons()
 
+def display_results(rows):
+    result_box.delete("1.0", END)
+
+    for row in rows:
+        result_box.insert(END, str(row) + "\n")
 
 # -- Form routing ---------------------------------------------------------------
 
@@ -263,6 +278,10 @@ def show_form(form_name):
         'list_borrower': [
             (list_borrower_id_label, 0, 0), (list_borrower_id, 0, 1),
         ],
+        "late_returns": [
+            (due_start_label, 0, 0), (due_start, 0, 1),
+            (due_end_label, 1, 0), (due_end, 1, 1),
+        ],
     }
 
     for widget, row, col in forms[form_name]:
@@ -274,13 +293,13 @@ def show_form(form_name):
         'add_book': submit_book,
         'list_copies': submit_list_copies,
         'list_borrower': submit_list_borrower,
+        "late_returns": submit_late_returns,
     }
 
     next_row = len(forms[form_name]) // 2
     confirm_btn.config(command=submit_commands[form_name])
     confirm_btn.grid(row=next_row, column=0, pady=10, padx=10, ipadx=60)
     cancel_btn.grid(row=next_row, column=1, pady=10, padx=10, ipadx=60)
-
 
 # -- Submit handlers ------------------------------------------------------------
 
@@ -309,41 +328,39 @@ def submit_borrower():
 
 
 def submit_checkout():
-    selected_book_id = book_id.get().strip()
-    selected_borrower_id = borrower_id.get().strip()
-
-    if not selected_book_id or not selected_borrower_id:
-        print('Error: Book ID and Borrower ID are required')
-        return
-
     try:
-        ensure_default_branch()
-        cursor.execute('''
+        cursor.execute("""
             INSERT INTO BOOK_LOANS
-            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date, Returned_Date)
-            VALUES (?, ?, ?, DATE('now'), DATE('now', '+7 days'), NULL)
-        ''', (selected_book_id, 1, selected_borrower_id))
+            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date)
+            VALUES (?, ?, ?, DATE('now'), DATE('now','+30 days'))
+        """, (book_id.get(), 1, borrower_id.get()))
+
         db.commit()
 
-        cursor.execute('''
+        cursor.execute("""
             SELECT Book_Id, Branch_Id, No_Of_Copies
             FROM BOOK_COPIES
             WHERE Book_Id = ?
-        ''', (selected_book_id,))
+        """, (book_id.get(),))
 
         rows = cursor.fetchall()
-        print('Checkout successful.')
-        if rows:
-            print('Updated copies:')
-            for row in rows:
-                print(row)
-        else:
-            print('No copy record found for this book in branch 1.')
+
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Book successfully checked out.\n\n")
+
+        for row in rows:
+            result_box.insert(
+                END,
+                f"Book ID: {row[0]}\n"
+                f"Branch ID: {row[1]}\n"
+                f"Copies Remaining: {row[2]}\n"
+                f"----------------------\n"
+            )
 
     except sqlite3.Error as e:
-        print(f'Database error: {e}')
+        result_box.delete("1.0", END)
+        result_box.insert(END, " Error: " + str(e))
 
-    hide_all()
 
 
 def submit_book():
@@ -398,30 +415,22 @@ def submit_book():
 
 
 def submit_list_copies():
-    selected_book_id = copies_book_id.get().strip()
+    cursor.execute("""
+        SELECT Book_Id, Branch_Id, No_Of_Copies
+        FROM BOOK_COPIES
+        WHERE Book_Id = ?
+    """, (copies_book_id.get(),))
 
-    if not selected_book_id:
-        print('Error: Book ID is required')
-        return
+    rows = cursor.fetchall()
 
-    try:
-        cursor.execute('''
-            SELECT Book_Id, Branch_Id, No_Of_Copies
-            FROM BOOK_COPIES
-            WHERE Book_Id = ?
-        ''', (selected_book_id,))
+    result_box.delete("1.0", END)
+    result_box.insert(END, "Available Copies:\n\n")
 
-        rows = cursor.fetchall()
-        print('Copies:')
-        if rows:
-            for row in rows:
-                print(row)
-        else:
-            print('No copy records found.')
-
-    except sqlite3.Error as e:
-        print(f'Database error: {e}')
-
+    for row in rows:
+        result_box.insert(
+            END,
+            f"Book ID: {row[0]} | Branch: {row[1]} | Copies: {row[2]}\n"
+        )
     hide_all()
 
 
@@ -452,5 +461,60 @@ def submit_list_borrower():
 
     hide_all()
 
+def submit_late_returns():
+    try:
+        cursor.execute("""
+                    SELECT 
+                BL.Book_Id,
+                B.Title,
+                BL.Branch_Id,
+                BL.Card_No,
+                BO.Name AS Borrower_Name,
+                BL.Date_Out,
+                BL.Due_Date,
+                BL.Returned_date,
+                CAST(julianday(BL.Returned_date) - julianday(BL.Due_Date) AS INT) AS Days_Late
+            FROM BOOK_LOANS BL
+            JOIN BOOK B ON BL.Book_Id = B.Book_Id
+            JOIN BORROWER BO ON BL.Card_No = BO.Card_No
+            WHERE BL.Due_Date BETWEEN ? AND ?
+              AND date(BL.Returned_date) IS NOT NULL
+              AND date(BL.Returned_date) > date(BL.Due_Date)
+        """, (due_start.get(), due_end.get()))
+
+        rows = cursor.fetchall()
+
+        result_box.delete("1.0", END)
+        result_box.insert(
+            END,
+            "Shows book loans returned after the due date within the selected due date range.\n\n"
+        )
+
+        if len(rows) == 0:
+            result_box.insert(END, "No late returns found for this due date range.\n")
+        else:
+            for row in rows:
+                result_box.insert(
+                    END,
+                    f"Book ID: {row[0]}\n"
+                    f"Title: {row[1]}\n"
+                    f"Branch ID: {row[2]}\n"
+                    f"Borrower ID: {row[3]}\n"
+                    f"Borrower Name: {row[4]}\n"
+                    f"Date Out: {row[5]}\n"
+                    f"Due Date: {row[6]}\n"
+                    f"Returned Date: {row[7]}\n"
+                    f"Days Late: {row[8]}\n"
+                    f"----------------------\n"
+                )
+
+    except sqlite3.Error as e:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Error: " + str(e))
+
+
+
+result_box = Text(root, height=10, width=45)
+result_box.grid(row=10, column=0, columnspan=2)
 
 root.mainloop()
