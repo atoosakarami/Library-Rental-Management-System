@@ -309,41 +309,38 @@ def submit_borrower():
 
 
 def submit_checkout():
-    selected_book_id = book_id.get().strip()
-    selected_borrower_id = borrower_id.get().strip()
-
-    if not selected_book_id or not selected_borrower_id:
-        print('Error: Book ID and Borrower ID are required')
-        return
-
     try:
-        ensure_default_branch()
-        cursor.execute('''
+        cursor.execute("""
             INSERT INTO BOOK_LOANS
-            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date, Returned_Date)
-            VALUES (?, ?, ?, DATE('now'), DATE('now', '+7 days'), NULL)
-        ''', (selected_book_id, 1, selected_borrower_id))
+            (Book_Id, Branch_Id, Card_No, Date_Out, Due_Date)
+            VALUES (?, ?, ?, DATE('now'), DATE('now','+30 days'))
+        """, (book_id.get(), 1, borrower_id.get()))
+
         db.commit()
 
-        cursor.execute('''
+        cursor.execute("""
             SELECT Book_Id, Branch_Id, No_Of_Copies
             FROM BOOK_COPIES
             WHERE Book_Id = ?
-        ''', (selected_book_id,))
+        """, (book_id.get(),))
 
         rows = cursor.fetchall()
-        print('Checkout successful.')
-        if rows:
-            print('Updated copies:')
-            for row in rows:
-                print(row)
-        else:
-            print('No copy record found for this book in branch 1.')
+
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Book successfully checked out.\n\n")
+
+        for row in rows:
+            result_box.insert(
+                END,
+                f"Book ID: {row[0]}\n"
+                f"Branch ID: {row[1]}\n"
+                f"Copies Remaining: {row[2]}\n"
+                f"----------------------\n"
+            )
 
     except sqlite3.Error as e:
-        print(f'Database error: {e}')
-
-    hide_all()
+        result_box.delete("1.0", END)
+        result_box.insert(END, " Error: " + str(e))
 
 
 def submit_book():
@@ -398,30 +395,22 @@ def submit_book():
 
 
 def submit_list_copies():
-    selected_book_id = copies_book_id.get().strip()
+    cursor.execute("""
+        SELECT Book_Id, Branch_Id, No_Of_Copies
+        FROM BOOK_COPIES
+        WHERE Book_Id = ?
+    """, (copies_book_id.get(),))
 
-    if not selected_book_id:
-        print('Error: Book ID is required')
-        return
+    rows = cursor.fetchall()
 
-    try:
-        cursor.execute('''
-            SELECT Book_Id, Branch_Id, No_Of_Copies
-            FROM BOOK_COPIES
-            WHERE Book_Id = ?
-        ''', (selected_book_id,))
+    result_box.delete("1.0", END)
+    result_box.insert(END, "Available Copies:\n\n")
 
-        rows = cursor.fetchall()
-        print('Copies:')
-        if rows:
-            for row in rows:
-                print(row)
-        else:
-            print('No copy records found.')
-
-    except sqlite3.Error as e:
-        print(f'Database error: {e}')
-
+    for row in rows:
+        result_box.insert(
+            END,
+            f"Book ID: {row[0]} | Branch: {row[1]} | Copies: {row[2]}\n"
+        )
     hide_all()
 
 
@@ -452,5 +441,60 @@ def submit_list_borrower():
 
     hide_all()
 
+def submit_late_returns():
+    try:
+        cursor.execute("""
+                    SELECT 
+                BL.Book_Id,
+                B.Title,
+                BL.Branch_Id,
+                BL.Card_No,
+                BO.Name AS Borrower_Name,
+                BL.Date_Out,
+                BL.Due_Date,
+                BL.Returned_date,
+                CAST(julianday(BL.Returned_date) - julianday(BL.Due_Date) AS INT) AS Days_Late
+            FROM BOOK_LOANS BL
+            JOIN BOOK B ON BL.Book_Id = B.Book_Id
+            JOIN BORROWER BO ON BL.Card_No = BO.Card_No
+            WHERE BL.Due_Date BETWEEN ? AND ?
+              AND date(BL.Returned_date) IS NOT NULL
+              AND date(BL.Returned_date) > date(BL.Due_Date)
+        """, (due_start.get(), due_end.get()))
+
+        rows = cursor.fetchall()
+
+        result_box.delete("1.0", END)
+        result_box.insert(
+            END,
+            "Shows book loans returned after the due date within the selected due date range.\n\n"
+        )
+
+        if len(rows) == 0:
+            result_box.insert(END, "No late returns found for this due date range.\n")
+        else:
+            for row in rows:
+                result_box.insert(
+                    END,
+                    f"Book ID: {row[0]}\n"
+                    f"Title: {row[1]}\n"
+                    f"Branch ID: {row[2]}\n"
+                    f"Borrower ID: {row[3]}\n"
+                    f"Borrower Name: {row[4]}\n"
+                    f"Date Out: {row[5]}\n"
+                    f"Due Date: {row[6]}\n"
+                    f"Returned Date: {row[7]}\n"
+                    f"Days Late: {row[8]}\n"
+                    f"----------------------\n"
+                )
+
+    except sqlite3.Error as e:
+        result_box.delete("1.0", END)
+        result_box.insert(END, "Error: " + str(e))
+
+
+
+result_box = Text(root, height=10, width=45)
+result_box.grid(row=10, column=0, columnspan=2)
 
 root.mainloop()
